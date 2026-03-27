@@ -58,8 +58,8 @@ class TestMetalPlatform:
         backend = MetalPlatform.get_attn_backend_cls(AttentionBackendEnum.CPU_ATTN, cfg)
         assert backend == AttentionBackendEnum.CPU_ATTN.get_path()
 
-    def test_get_attn_backend_cls_rejects_mla(self) -> None:
-        """MLA is not supported on Metal/MLX."""
+    def test_get_attn_backend_cls_accepts_mla(self) -> None:
+        """MLA is handled by the vllm-metal model runner; CPU_ATTN is returned."""
         cfg = AttentionSelectorConfig(
             head_size=128,
             dtype=torch.float16,
@@ -67,8 +67,8 @@ class TestMetalPlatform:
             block_size=16,
             use_mla=True,
         )
-        with pytest.raises(NotImplementedError, match="MLA is not supported"):
-            MetalPlatform.get_attn_backend_cls(AttentionBackendEnum.CPU_ATTN, cfg)
+        backend = MetalPlatform.get_attn_backend_cls(AttentionBackendEnum.CPU_ATTN, cfg)
+        assert backend == AttentionBackendEnum.CPU_ATTN.get_path()
 
     def test_get_attn_backend_cls_rejects_sparse(self) -> None:
         """Sparse attention is not supported on Metal/MLX."""

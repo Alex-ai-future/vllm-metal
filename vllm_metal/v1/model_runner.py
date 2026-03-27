@@ -47,6 +47,7 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_metal.config import get_config
+from vllm_metal.paged_attention_backend.mla import MLA_DEFAULT_QK_ROPE_HEAD_DIM
 from vllm_metal.paged_attention_backend.protocol import PagedAttentionBackend
 from vllm_metal.paged_attention_common import (
     OffsetCache,
@@ -73,9 +74,6 @@ _model_cache_lock = Lock()
 _MIN_BATCH_SIZE_FOR_BATCHING = 2  # Minimum requests to use BatchKVCache
 _MAX_BATCH_SIZE = 64  # Maximum batch size for decode
 
-# MLA default rope head dim (GLM/DeepSeek lineage; used when qk_rope_head_dim
-# is absent from model config).
-_MLA_DEFAULT_QK_ROPE_HEAD_DIM = 64
 
 # Performance tuning
 _CACHE_CLEAR_INTERVAL = 50  # Clear cache every N finished requests
@@ -682,6 +680,19 @@ class MetalModelRunner:
         """
         return "kv_lora_rank" in self.model_args
 
+    @property
+    def mla_latent_dim(self) -> int:
+        """Combined latent dimension for MLA cache: kv_lora_rank + qk_rope_head_dim.
+
+        Only valid when is_mla is True. Derived directly from model_args so
+        callers do not depend on the _resolve_model_dims head_dim override.
+        """
+        if not self.is_mla:
+            raise AttributeError("mla_latent_dim is only valid for MLA models")
+        return int(self.model_args["kv_lora_rank"]) + int(
+            self.model_args.get("qk_rope_head_dim", MLA_DEFAULT_QK_ROPE_HEAD_DIM)
+        )
+
     def should_setup_paged_attention(self) -> bool:
         """Whether worker-side paged-attention setup should run.
 
@@ -908,12 +919,12 @@ class MetalModelRunner:
 
         # MLA (GLM/DeepSeek lineage): cache stores a joint latent vector per
         # layer, not per-head K/V. One virtual head sized kv_lora_rank +
-        # qk_rope_head_dim keeps get_cache_block_size_bytes() correct without
-        # MLA-specific logic in the sizing path.
+        # qk_rope_head_dim keeps get_cache_block_size_bytes() conservative (2x)
+        # without MLA-specific logic in the sizing path.
         if self.is_mla:
             self.num_kv_heads = 1
             self.head_dim = int(args["kv_lora_rank"]) + int(
-                args.get("qk_rope_head_dim", _MLA_DEFAULT_QK_ROPE_HEAD_DIM)
+                args.get("qk_rope_head_dim", MLA_DEFAULT_QK_ROPE_HEAD_DIM)
             )
 
     def _extract_logits(self, model_output: Any) -> mx.array:

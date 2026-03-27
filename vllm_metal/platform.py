@@ -304,7 +304,11 @@ class MetalPlatform(Platform):
         if selected_backend and selected_backend != AttentionBackendEnum.CPU_ATTN:
             logger.info(f"Cannot use {selected_backend} backend on Metal/MLX.")
         if attn_selector_config.use_mla:
-            raise NotImplementedError("MLA is not supported on Metal/MLX.")
+            # MLA attention is handled by the vllm-metal model runner (MLAPagedAttentionWrapper),
+            # not by vLLM's attention backend selector. Continue to return CPU_ATTN below.
+            logger.info(
+                "MLA model detected; attention handled by vllm-metal model runner"
+            )
         if attn_selector_config.use_sparse:
             raise NotImplementedError("Sparse Attention is not supported on Metal/MLX.")
         return AttentionBackendEnum.CPU_ATTN.get_path()
