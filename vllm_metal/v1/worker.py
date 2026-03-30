@@ -174,6 +174,14 @@ class MetalWorker(WorkerBase):
         runner = self.model_runner
         block_size = self.metal_config.block_size
 
+        if runner.is_hybrid:
+            raise RuntimeError(
+                "Paged attention is not yet supported for hybrid models "
+                "(Qwen3.5). Linear attention kernel is not implemented "
+                "(Stage C of #194). Use the mlx_lm inline cache path instead "
+                "by unsetting VLLM_METAL_USE_PAGED_ATTENTION."
+            )
+
         # --- Determine memory fraction ---
         if self.metal_config.is_auto_memory:
             fraction = PAGED_ATTENTION_DEFAULT_MEMORY_FRACTION
@@ -260,45 +268,38 @@ class MetalWorker(WorkerBase):
         if runner.kv_cache_dtype is None:
             raise RuntimeError("KV cache dtype not initialized; runner.load_model()")
 
+        backend = self._make_backend(runner, block_size)
+        backend.initialize(num_blocks)
+        n_patched = backend.patch_model(runner.model)
+        logger.info(
+            "Paged attention enabled: %d layers patched, "
+            "%d blocks allocated (block_size=%d, mla=%s)",
+            n_patched,
+            num_blocks,
+            block_size,
+            runner.is_mla,
+        )
+
+        runner._paged_attention_backend = backend
+        runner._paged_block_size = block_size
+
+    @staticmethod
+    def _make_backend(runner: MetalModelRunner, block_size: int) -> Any:
+        """Create the right paged attention backend for the model type."""
         if runner.is_mla:
-            backend = MLAPagedAttentionBackend(
+            return MLAPagedAttentionBackend(
                 num_layers=runner.num_layers,
                 latent_dim=runner.mla_latent_dim,
                 block_size=block_size,
                 dtype=runner.kv_cache_dtype,
             )
-        else:
-            backend = MHAPagedAttentionBackend(
-                num_layers=runner.num_layers,
-                num_kv_heads=runner.num_kv_heads,
-                head_dim=runner.head_dim,
-                block_size=block_size,
-                dtype=runner.kv_cache_dtype,
-            )
-        backend.initialize(num_blocks)
-        n_patched = backend.patch_model(runner.model)
-        if runner.is_mla:
-            logger.info(
-                "MLA paged attention enabled: %d layers patched, "
-                "%d blocks allocated (block_size=%d, latent_dim=%d)",
-                n_patched,
-                num_blocks,
-                block_size,
-                runner.mla_latent_dim,
-            )
-        else:
-            logger.info(
-                "Metal kernel paged attention enabled: %d layers patched, "
-                "%d blocks allocated (block_size=%d, kv_heads=%d, head_dim=%d)",
-                n_patched,
-                num_blocks,
-                block_size,
-                runner.num_kv_heads,
-                runner.head_dim,
-            )
-
-        runner._paged_attention_backend = backend
-        runner._paged_block_size = block_size
+        return MHAPagedAttentionBackend(
+            num_layers=runner.num_layers,
+            num_kv_heads=runner.num_kv_heads,
+            head_dim=runner.head_dim,
+            block_size=block_size,
+            dtype=runner.kv_cache_dtype,
+        )
 
     def _get_model_memory_usage(self) -> int:
         """Get current model memory usage from MLX.
@@ -327,19 +328,26 @@ class MetalWorker(WorkerBase):
         return 0
 
     def _one_sequence_kv_bytes(self) -> int:
-        """Bytes for one max-length sequence of KV cache (K + V)."""
+        """Bytes for one max-length sequence of cache state."""
         runner = self.model_runner
-        dtype_size = (
-            runner.kv_cache_dtype.size if runner.kv_cache_dtype is not None else 2
+        if runner.kv_cache_dtype is None:
+            raise RuntimeError("KV cache dtype not initialized; runner.load_model()")
+        dtype_size = runner.kv_cache_dtype.size
+
+        num_kv_layers = (
+            runner.num_sdpa_layers if runner.is_hybrid else runner.num_layers
         )
-        return (
-            2  # K and V
-            * runner.num_layers
+        sdpa_kv_bytes = (
+            2
+            * num_kv_layers
             * self.model_config.max_model_len
             * runner.num_kv_heads
             * runner.head_dim
             * dtype_size
         )
+        if runner.is_hybrid:
+            return sdpa_kv_bytes + runner.linear_cache_bytes_per_slot()
+        return sdpa_kv_bytes
 
     def determine_available_memory(self) -> int:
         """Determine available memory for KV cache.
