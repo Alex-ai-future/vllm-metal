@@ -370,16 +370,14 @@ class MetalPlatform(Platform):
             return
 
         # Check if this is a hybrid model
-        is_hybrid = getattr(model_config, 'is_hybrid', False)
+        is_hybrid = getattr(model_config, "is_hybrid", False)
         if not is_hybrid:
             return
 
         # Compute attention page size for 1 token
         attn_page_size_1_token = FullAttentionSpec(
             block_size=1,
-            num_kv_heads=model_config.get_num_kv_heads(
-                vllm_config.parallel_config
-            ),
+            num_kv_heads=model_config.get_num_kv_heads(vllm_config.parallel_config),
             head_size=model_config.get_head_size(),
             dtype=model_config.dtype,
         ).page_size_bytes
