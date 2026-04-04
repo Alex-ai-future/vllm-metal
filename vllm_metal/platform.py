@@ -353,15 +353,90 @@ class MetalPlatform(Platform):
         For hybrid models (Qwen3.5), linear attention layers (MambaSpec) have
         a fixed page size, while attention layers (FullAttentionSpec) have a
         page size that scales with block_size. This method adjusts block_size
-        to ensure the attention page size is divisible by the mamba page size.
+        to ensure the attention page size is >= mamba page size, and pads
+        mamba page size to exactly match attention page size.
 
         Args:
             vllm_config: vLLM configuration
         """
-        # For now, skip page size unification
-        # MLX manages its own cache internally, so vLLM's page size
-        # unification is not needed
-        return
+        from vllm.model_executor.models import ModelRegistry
+        from vllm.utils.math_utils import cdiv
+        from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
+
+        cache_config = vllm_config.cache_config
+        model_config = vllm_config.model_config
+
+        if not model_config:
+            return
+
+        # Check if this is a hybrid model
+        is_hybrid = getattr(model_config, 'is_hybrid', False)
+        if not is_hybrid:
+            return
+
+        # Compute attention page size for 1 token
+        attn_page_size_1_token = FullAttentionSpec(
+            block_size=1,
+            num_kv_heads=model_config.get_num_kv_heads(
+                vllm_config.parallel_config
+            ),
+            head_size=model_config.get_head_size(),
+            dtype=model_config.dtype,
+        ).page_size_bytes
+
+        # Compute mamba page size
+        try:
+            model_cls, _ = ModelRegistry.resolve_model_cls(
+                model_config.architecture,
+                model_config=model_config,
+            )
+            mamba_state_shape = model_cls.get_mamba_state_shape_from_config(vllm_config)
+            mamba_state_dtype = model_cls.get_mamba_state_dtype_from_config(vllm_config)
+
+            mamba_page_size = MambaSpec(
+                shapes=mamba_state_shape,
+                dtypes=mamba_state_dtype,
+                block_size=-1,
+            ).page_size_bytes
+        except Exception:
+            return
+
+        if mamba_page_size == 0:
+            return
+
+        # Calculate minimum block_size to make attention page_size >= mamba page_size
+        attn_tokens_per_mamba_state = cdiv(mamba_page_size, attn_page_size_1_token)
+
+        # Round up to nearest multiple of 32 for performance
+        kernel_block_alignment_size = 32
+        attn_block_size = kernel_block_alignment_size * cdiv(
+            attn_tokens_per_mamba_state, kernel_block_alignment_size
+        )
+
+        if cache_config.block_size < attn_block_size:
+            cache_config.block_size = attn_block_size
+            logger.info(
+                "Setting attention block size to %d tokens "
+                "to ensure that attention page size is >= mamba page size.",
+                attn_block_size,
+            )
+
+        if cache_config.mamba_cache_mode == "align":
+            cache_config.mamba_block_size = cache_config.block_size
+
+        # Pad mamba page size to exactly match attention page size
+        attn_page_size = cache_config.block_size * attn_page_size_1_token
+        if attn_page_size > mamba_page_size:
+            cache_config.mamba_page_size_padded = attn_page_size
+            mamba_padding_pct = (
+                100 * (attn_page_size - mamba_page_size) / mamba_page_size
+            )
+            logger.info(
+                "Padding mamba page size by %.2f%% to ensure "
+                "that mamba page size and attention page size are "
+                "exactly equal.",
+                mamba_padding_pct,
+            )
 
     @classmethod
     def is_pin_memory_available(cls) -> bool:

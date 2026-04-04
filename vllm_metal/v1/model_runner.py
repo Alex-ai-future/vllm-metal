@@ -1045,7 +1045,10 @@ class MetalModelRunner:
                 ),
             }
 
-        block_size = self.metal_config.block_size
+        # Use block_size from vllm_config, which may have been updated by
+        # update_block_size_for_backend() for hybrid models to ensure page size
+        # unification between FullAttentionSpec and MambaSpec.
+        block_size = self.vllm_config.cache_config.block_size
         if self.kv_cache_dtype is None:
             raise RuntimeError("KV cache dtype not initialized; load_model() first")
 
@@ -1067,6 +1070,7 @@ class MetalModelRunner:
                     value_head_dim=self.linear_value_head_dim,
                     key_head_dim=self.linear_key_head_dim,
                     torch_dtype=torch_dtype,
+                    page_size_padded=self.vllm_config.cache_config.mamba_page_size_padded,
                 )
             else:
                 # SDPA layers use FullAttentionSpec

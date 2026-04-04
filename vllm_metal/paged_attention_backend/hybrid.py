@@ -20,6 +20,7 @@ def _build_linear_layer_spec(
     value_head_dim: int,
     key_head_dim: int,
     torch_dtype: torch.dtype,
+    page_size_padded: int | None = None,
 ) -> MambaSpec:
     """Build a MambaSpec for one GDN linear attention layer."""
     return MambaSpec(
@@ -29,4 +30,5 @@ def _build_linear_layer_spec(
         ),
         dtypes=(torch_dtype, torch_dtype),
         block_size=1,
+        page_size_padded=page_size_padded,
     )
