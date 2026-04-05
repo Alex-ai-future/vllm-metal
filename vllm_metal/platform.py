@@ -415,6 +415,18 @@ class MetalPlatform(Platform):
 
         # Step 3: Calculate block_size so SDPA page_size >= Mamba page_size
         # Use the same formula as vLLM's CPU platform for consistency
+        #
+        # Note: kernel_block_alignment_size=32 is chosen for Metal GPU performance.
+        # Common Metal threadgroup sizes are multiples of 32 (e.g., 32, 64, 128, 256).
+        # However, this value has no actual impact on MLX execution because:
+        # - MLX manages its own KV cache via make_prompt_cache()
+        # - This block_size is only used to satisfy vLLM's validation logic
+        # - The actual Metal kernel uses MLX's native memory layout
+        #
+        # Using 32 provides a reasonable balance between:
+        # - GPU performance (aligned to Metal threadgroup preferences)
+        # - Memory efficiency (not excessively large)
+        # - Compatibility with vLLM's page size unification requirements
         kernel_block_alignment_size = 32  # Metal GPU kernel alignment
         attn_block_size = kernel_block_alignment_size * cdiv(
             mamba_page_size,
