@@ -347,8 +347,6 @@ class MetalPlatform(Platform):
         # Handle cache_dtype conversion
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
         from vllm.v1.kv_cache_interface import (
-            FullAttentionSpec,
-            MambaSpec,
             MLAAttentionSpec,
         )
 
