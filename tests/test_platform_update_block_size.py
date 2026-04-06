@@ -470,7 +470,6 @@ class TestMLAModels:
                 MetalPlatform.update_block_size_for_backend(mla_vllm_config)
 
                 # Verify: MLAAttentionSpec should be used for MLA models
-                # This assertion will FAIL until we add MLA support
                 assert mock_mla_spec.called, (
                     "MLAAttentionSpec should be used for MLA models (use_mla=True)"
                 )
@@ -518,8 +517,6 @@ class TestMLAModels:
         - cache_dtype is converted to torch.dtype correctly
         - MLAAttentionSpec uses the correct dtype
         - mamba_page_size_padded is set correctly
-
-        Note: This test will FAIL until cache_dtype support is added.
         """
         mla_vllm_config.cache_config.cache_dtype = cache_dtype
 

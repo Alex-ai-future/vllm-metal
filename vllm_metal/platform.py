@@ -327,6 +327,10 @@ class MetalPlatform(Platform):
 
         Args:
             vllm_config: vLLM configuration (modified in-place for vLLM validation)
+
+        Raises:
+            ValueError: If hybrid model is used with paged attention on Metal
+                        (unsupported configuration due to kernel limitations)
         """
         from vllm.model_executor.models import ModelRegistry
         from vllm.utils.math_utils import cdiv
@@ -342,6 +346,25 @@ class MetalPlatform(Platform):
         is_hybrid = getattr(model_config, "is_hybrid", False)
         if not is_hybrid:
             return
+
+        # Check for unsupported hybrid + paged attention configuration on Metal.
+        # Metal paged attention kernels only support block_size in {8, 16, 32},
+        # but hybrid models require block_size=160 to satisfy vLLM's page size
+        # divisibility validation. This results in a cryptic kernel load failure.
+        # We raise a clear error here to guide users to the native MLX path.
+        from vllm_metal.config import get_config
+
+        metal_config = get_config()
+        if metal_config.use_paged_attention:
+            raise ValueError(
+                "Hybrid models (e.g., Qwen3.5) are not supported with paged "
+                "attention on Metal. The Metal paged attention kernel only "
+                "supports block_size in {8, 16, 32}, but hybrid models require "
+                "block_size=160 to satisfy vLLM's page size divisibility "
+                "validation. Please remove VLLM_METAL_USE_PAGED_ATTENTION=1 to "
+                "use the native MLX KV cache path which handles hybrid models "
+                "correctly."
+            )
 
         # Step 1: Compute attention page size per token
         # Handle cache_dtype conversion

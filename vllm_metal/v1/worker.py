@@ -27,6 +27,10 @@ from vllm_metal.config import (
     PAGED_ATTENTION_OVERHEAD_BYTES,
     get_config,
 )
+
+# Memory budget fraction for MLX non-paged path.
+# Reports 80% of remaining Metal memory for KV cache.
+_MLX_MEMORY_BUDGET_FRACTION = 0.8
 from vllm_metal.paged_attention_backend.mha import MHAPagedAttentionBackend
 from vllm_metal.paged_attention_backend.mla import MLAPagedAttentionBackend
 from vllm_metal.platform import MetalPlatform
@@ -429,7 +433,7 @@ class MetalWorker(WorkerBase):
         metal_limit = int(device_info.get("max_recommended_working_set_size", 0))
         model_memory = self._get_model_memory_usage()
         remaining = metal_limit - model_memory
-        available = int(remaining * 0.8)  # Conservative estimate
+        available = int(remaining * _MLX_MEMORY_BUDGET_FRACTION)
         logger.info(
             "MLX path: reporting %.2f GB for scheduler (Metal limit: %.2f GB, "
             "Model: %.2f GB, Remaining: %.2f GB, KV budget: %.2f GB)",
