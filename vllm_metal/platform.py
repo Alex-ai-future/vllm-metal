@@ -343,13 +343,35 @@ class MetalPlatform(Platform):
         if not is_hybrid:
             return
 
-        # Step 1: Compute SDPA page size per token
-        attn_page_size_1_token = FullAttentionSpec(
-            block_size=1,
-            num_kv_heads=model_config.get_num_kv_heads(vllm_config.parallel_config),
-            head_size=model_config.get_head_size(),
-            dtype=model_config.dtype,
-        ).page_size_bytes
+        # Step 1: Compute attention page size per token
+        # Handle cache_dtype conversion
+        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+        from vllm.v1.kv_cache_interface import (
+            FullAttentionSpec,
+            MambaSpec,
+            MLAAttentionSpec,
+        )
+
+        if cache_config.cache_dtype == "auto":
+            kv_cache_dtype = model_config.dtype
+        else:
+            kv_cache_dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+
+        # Use MLAAttentionSpec for MLA models, FullAttentionSpec otherwise
+        if getattr(model_config, "use_mla", False):
+            attn_page_size_1_token = MLAAttentionSpec(
+                block_size=1,
+                num_kv_heads=model_config.get_num_kv_heads(vllm_config.parallel_config),
+                head_size=model_config.get_head_size(),
+                dtype=kv_cache_dtype,
+            ).page_size_bytes
+        else:
+            attn_page_size_1_token = FullAttentionSpec(
+                block_size=1,
+                num_kv_heads=model_config.get_num_kv_heads(vllm_config.parallel_config),
+                head_size=model_config.get_head_size(),
+                dtype=kv_cache_dtype,
+            ).page_size_bytes
 
         # Step 2: Get Mamba page size (fixed, independent of block_size)
         try:
