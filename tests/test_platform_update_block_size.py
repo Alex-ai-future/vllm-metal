@@ -424,7 +424,9 @@ class TestMLAModels:
             ),
         }
 
-    def test_mla_hybrid_model_uses_mla_spec(self, mla_vllm_config, mock_mla_mamba_state):
+    def test_mla_hybrid_model_uses_mla_spec(
+        self, mla_vllm_config, mock_mla_mamba_state
+    ):
         """Test: MLA + Hybrid model uses MLAAttentionSpec (not FullAttentionSpec).
 
         This test verifies that MLA models use MLAAttentionSpec for page size
@@ -449,16 +451,19 @@ class TestMLAModels:
 
             # Mock to track which Spec class is used
             # Patch at the vllm.v1.kv_cache_interface level where they're imported from
-            with patch("vllm.v1.kv_cache_interface.MLAAttentionSpec") as mock_mla_spec, \
-                 patch("vllm.v1.kv_cache_interface.FullAttentionSpec") as mock_full_spec:
-
+            with (
+                patch("vllm.v1.kv_cache_interface.MLAAttentionSpec") as mock_mla_spec,
+                patch("vllm.v1.kv_cache_interface.FullAttentionSpec") as mock_full_spec,
+            ):
                 # Setup mock return values
                 mock_mla_spec_instance = MagicMock()
                 mock_mla_spec_instance.page_size_bytes = 4096  # MLA page size
                 mock_mla_spec.return_value = mock_mla_spec_instance
 
                 mock_full_spec_instance = MagicMock()
-                mock_full_spec_instance.page_size_bytes = 2048  # Different FullAttention page size
+                mock_full_spec_instance.page_size_bytes = (
+                    2048  # Different FullAttention page size
+                )
                 mock_full_spec.return_value = mock_full_spec_instance
 
                 # Execute
