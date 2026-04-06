@@ -125,7 +125,7 @@ def _get_prefix_cache_max_bytes() -> int:
 
     fallback_bytes = 8 * 1024 * 1024 * 1024  # 8 GB
     try:
-        device_info = mx.metal.device_info()
+        device_info = mx.device_info()
         total = int(device_info.get("max_recommended_working_set_size", 0))
     except (AttributeError, RuntimeError):
         total = 0
