@@ -351,23 +351,40 @@ class MetalPlatform(Platform):
         if not is_hybrid:
             return
 
-        # Check for unsupported hybrid + paged attention configuration on Metal.
-        # Metal paged attention kernels only support block_size in {8, 16, 32},
-        # but hybrid models require block_size=160 to satisfy vLLM's page size
-        # divisibility validation. This results in a cryptic kernel load failure.
-        # We raise a clear error here to guide users to the native MLX path.
+        # For hybrid models with paged attention, log a warning explaining the
+        # block-size translation mechanism.
+        #
+        # Background:
+        # - vLLM requires block_size=160 (or larger) for hybrid models to satisfy
+        #   page size divisibility validation between SDPA and Mamba layers.
+        # - Metal paged attention kernels only support block_size in {8, 16, 32}.
+        #
+        # Solution (PR #235):
+        # - vLLM sees a large block_size (e.g., 160) for its scheduler validation.
+        # - The Metal kernel uses a translated block_size (e.g., 32) that it supports.
+        # - Each vLLM block is split into ratio = cache_block_size / kernel_block_size
+        #   kernel blocks. For example, one vLLM block of 160 tokens becomes 5 kernel
+        #   blocks of 32 tokens each.
+        # - The KV cache is reshaped (zero-copy) to match: [num_blocks, 160, ...] →
+        #   [num_blocks*5, 32, ...]. The physical memory layout is unchanged.
+        # - Block tables are expanded so the kernel reads the correct blocks.
+        #
+        # This is a logical transformation only — the computation is identical, just
+        # the kernel sees more, smaller blocks.
         from vllm_metal.config import get_config
 
         metal_config = get_config()
         if metal_config.use_paged_attention:
-            raise ValueError(
-                "Hybrid models (e.g., Qwen3.5) are not supported with paged "
-                "attention on Metal. The Metal paged attention kernel only "
-                "supports block_size in {8, 16, 32}, but hybrid models require "
-                "block_size=160 to satisfy vLLM's page size divisibility "
-                "validation. Please remove VLLM_METAL_USE_PAGED_ATTENTION=1 to "
-                "use the native MLX KV cache path which handles hybrid models "
-                "correctly."
+            logger.warning(
+                "Hybrid model (e.g., Qwen3.5) with paged attention enabled. "
+                "Using block-size translation (PR #235) to convert vLLM's large "
+                "block_size to a Metal kernel-compatible size.\n"
+                "  Mechanism: Each vLLM block is split into multiple kernel blocks.\n"
+                "  Example: vLLM block_size=160 → kernel block_size=32 (ratio=5).\n"
+                "  The KV cache is reshaped (zero-copy) and block tables are expanded.\n"
+                "  This is a logical transformation — physical memory is unchanged.\n"
+                "  Note: The default MLX path (without paged attention) is recommended "
+                "for hybrid models as it has no translation overhead."
             )
 
         # Step 1: Compute attention page size per token
