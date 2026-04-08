@@ -354,18 +354,21 @@ class TestUpdateBlockSizeForBackend:
                 vllm_config.cache_config.block_size
             )
 
-    def test_hybrid_with_paged_attention_raises_error(
-        self, vllm_config, mock_mamba_state
+    def test_hybrid_with_paged_attention_logs_warning(
+        self, vllm_config, mock_mamba_state, caplog
     ):
-        """Test: Hybrid model + paged attention raises ValueError.
+        """Test: Hybrid model + paged attention logs a warning (PR #235).
 
-        Metal paged attention kernels only support block_size in {8, 16, 32},
-        but hybrid models require block_size=160. This configuration is
-        unsupported and should raise a clear error message.
+        PR #235 added block-size translation to support hybrid + paged attention.
+        When paged attention is enabled for hybrid models, a warning should be
+        logged explaining the translation mechanism.
         """
+        import logging
+
         with (
             patch("vllm.model_executor.models.ModelRegistry") as mock_registry,
             patch("vllm_metal.config.get_config") as mock_get_config,
+            caplog.at_level(logging.WARNING),
         ):
             mock_model_cls = MagicMock()
             mock_model_cls.get_mamba_state_shape_from_config.return_value = (
@@ -381,16 +384,13 @@ class TestUpdateBlockSizeForBackend:
             mock_metal_config.use_paged_attention = True
             mock_get_config.return_value = mock_metal_config
 
-            # Execute and verify exception
-            with pytest.raises(ValueError) as exc_info:
-                MetalPlatform.update_block_size_for_backend(vllm_config)
+            # Execute - should NOT raise, just log warning
+            MetalPlatform.update_block_size_for_backend(vllm_config)
 
-            # Verify exception message contains helpful guidance
-            error_msg = str(exc_info.value)
-            assert "Hybrid models" in error_msg
-            assert "not supported with paged attention" in error_msg
-            assert "block_size in {8, 16, 32}" in error_msg
-            assert "VLLM_METAL_USE_PAGED_ATTENTION=1" in error_msg
+            # Verify warning was logged with explanation
+            assert "block-size translation" in caplog.text
+            assert "PR #235" in caplog.text
+            assert "kernel blocks" in caplog.text
 
 
 # ============================================================================

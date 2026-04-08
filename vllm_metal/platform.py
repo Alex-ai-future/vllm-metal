@@ -338,7 +338,12 @@ class MetalPlatform(Platform):
         """
         from vllm.model_executor.models import ModelRegistry
         from vllm.utils.math_utils import cdiv
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, MambaSpec
+        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
+        from vllm.v1.kv_cache_interface import (
+            FullAttentionSpec,
+            MambaSpec,
+            MLAAttentionSpec,
+        )
 
         cache_config = vllm_config.cache_config
         model_config = vllm_config.model_config
@@ -389,20 +394,18 @@ class MetalPlatform(Platform):
 
         # Step 1: Compute attention page size per token
         # Handle cache_dtype conversion
-        from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-        from vllm.v1.kv_cache_interface import MLAAttentionSpec, FullAttentionSpec
-
         if cache_config.cache_dtype == "auto":
             kv_cache_dtype = model_config.dtype
         else:
             kv_cache_dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
 
         # Use MLAAttentionSpec for MLA models, FullAttentionSpec otherwise
-        SpecClass = (
-            MLAAttentionSpec if getattr(model_config, "use_mla", False)
+        spec_class = (
+            MLAAttentionSpec
+            if getattr(model_config, "use_mla", False)
             else FullAttentionSpec
         )
-        attn_page_size_1_token = SpecClass(
+        attn_page_size_1_token = spec_class(
             block_size=1,
             num_kv_heads=model_config.get_num_kv_heads(vllm_config.parallel_config),
             head_size=model_config.get_head_size(),
