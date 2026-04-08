@@ -482,50 +482,50 @@ def _mock_device_info():
 class TestPrefixCacheFractionParsing:
     def test_valid_fraction(self, monkeypatch) -> None:
         monkeypatch.setenv("VLLM_METAL_PREFIX_CACHE_FRACTION", "0.1")
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * 0.1)
 
     def test_default_fraction(self, monkeypatch) -> None:
         monkeypatch.delenv("VLLM_METAL_PREFIX_CACHE_FRACTION", raising=False)
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * mr._PREFIX_CACHE_DEFAULT_FRACTION)
 
     def test_invalid_string_uses_default(self, monkeypatch) -> None:
         monkeypatch.setenv("VLLM_METAL_PREFIX_CACHE_FRACTION", "abc")
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * mr._PREFIX_CACHE_DEFAULT_FRACTION)
 
     def test_out_of_range_zero_uses_default(self, monkeypatch) -> None:
         monkeypatch.setenv("VLLM_METAL_PREFIX_CACHE_FRACTION", "0")
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * mr._PREFIX_CACHE_DEFAULT_FRACTION)
 
     def test_out_of_range_above_one_uses_default(self, monkeypatch) -> None:
         monkeypatch.setenv("VLLM_METAL_PREFIX_CACHE_FRACTION", "2")
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * mr._PREFIX_CACHE_DEFAULT_FRACTION)
 
     def test_nan_uses_default(self, monkeypatch) -> None:
         monkeypatch.setenv("VLLM_METAL_PREFIX_CACHE_FRACTION", "nan")
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * mr._PREFIX_CACHE_DEFAULT_FRACTION)
 
     def test_inf_uses_default(self, monkeypatch) -> None:
         monkeypatch.setenv("VLLM_METAL_PREFIX_CACHE_FRACTION", "inf")
-        monkeypatch.setattr(mr.mx.metal, "device_info", _mock_device_info)
+        monkeypatch.setattr(mr.mx, "device_info", _mock_device_info)
         result = mr._get_prefix_cache_max_bytes()
         assert result == int(_TEN_GB * mr._PREFIX_CACHE_DEFAULT_FRACTION)
 
     def test_device_info_fallback(self, monkeypatch) -> None:
         monkeypatch.delenv("VLLM_METAL_PREFIX_CACHE_FRACTION", raising=False)
         monkeypatch.setattr(
-            mr.mx.metal,
+            mr.mx,
             "device_info",
             lambda: {},
         )

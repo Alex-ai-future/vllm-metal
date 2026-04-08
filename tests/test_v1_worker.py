@@ -19,6 +19,8 @@ def _make_worker(model_runner: object, *, use_paged_attention: bool) -> MetalWor
     worker = MetalWorker.__new__(MetalWorker)
     worker.model_runner = model_runner  # type: ignore[assignment]
     worker.metal_config = SimpleNamespace(use_paged_attention=use_paged_attention)
+    worker.cache_config = SimpleNamespace(block_size=16)
+    worker.vllm_config = SimpleNamespace(cache_config=worker.cache_config)
     return worker
 
 
@@ -88,19 +90,32 @@ class TestWorkerRunnerBoundaryDelegation:
         worker.get_cache_block_size_bytes.assert_called_once_with()
 
     def test_determine_available_memory_single_sequence_mode(self) -> None:
+        """Test MLX path returns one max-length sequence estimate (PR #229)."""
+        import mlx.core as mx
+
         model_runner = SimpleNamespace(
             scheduler_memory_reporting_mode=MagicMock(
                 return_value="single_sequence_estimate"
             ),
+            kv_cache_dtype=mx.float16,
+            is_hybrid=False,
+            is_mla=False,
+            num_layers=16,
+            num_kv_heads=8,
+            head_dim=128,
         )
         worker = _make_worker(model_runner, use_paged_attention=False)
-        worker._one_sequence_kv_bytes = MagicMock(return_value=4096)
         worker.model_config = SimpleNamespace(max_model_len=2048)
 
-        available = MetalWorker.determine_available_memory(worker)
+        try:
+            available = MetalWorker.determine_available_memory(worker)
 
-        assert available == 4096
-        worker._one_sequence_kv_bytes.assert_called_once_with()
+            # Should return one max-length sequence KV cache bytes
+            # 2 (K+V) * 16 layers * 2048 tokens * 8 heads * 128 head_dim * 2 bytes
+            expected = 2 * 16 * 2048 * 8 * 128 * 2
+            assert available == expected
+        finally:
+            pass
 
     def test_get_supported_tasks_delegates_to_runner_capability(self) -> None:
         model_runner = SimpleNamespace(

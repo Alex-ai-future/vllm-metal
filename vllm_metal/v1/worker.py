@@ -143,17 +143,10 @@ class MetalWorker(WorkerBase):
         # Boundary ownership:
         # - Worker owns resource setup.
         # - Runner owns STT/runtime capability decisions.
-        # Hybrid models (Qwen3.5 SDPA+GDN) require paged attention for
-        # SDPA KV cache + GDN recurrent state management.
-        if not self.metal_config.use_paged_attention and self.model_runner.is_hybrid:
-            self.metal_config.use_paged_attention = True
-            # Prefix caching guard: check_and_update_config() skipped this
-            # because use_paged_attention was False at config time.
-            cache_config = self.vllm_config.cache_config
-            if getattr(cache_config, "enable_prefix_caching", False):
-                cache_config.enable_prefix_caching = False
-                logger.info("Metal: disabled prefix caching for hybrid model")
-            logger.info("Auto-enabled paged attention for hybrid model")
+        # Note: For hybrid models (Qwen3.5), we don't auto-enable paged attention
+        # because MLX's make_prompt_cache() handles hybrid KV cache natively.
+        # Paged attention for hybrid models requires splitting KV cache across
+        # multiple buffers to avoid Metal's max buffer size limit (~9.5GB).
         if (
             self.metal_config.use_paged_attention
             and self.model_runner.should_setup_paged_attention()
@@ -430,10 +423,14 @@ class MetalWorker(WorkerBase):
             )
             return available
 
-        # Default MLX path: one max-length sequence for admission control.
+        # Default MLX path: report one max-length sequence for admission control.
+        # This matches the design from PR #229, which ensures the scheduler
+        # can admit at least one sequence without over-committing memory.
+        # MLX's make_prompt_cache() dynamically allocates KV cache per request,
+        # so we only need to report enough for one sequence.
         available = self._one_sequence_kv_bytes()
         logger.info(
-            "MLX path: reporting %.2fGB for scheduler admission control "
+            "MLX path: reporting %.2f GB for scheduler admission control "
             "(one max-length sequence, max_model_len=%d)",
             available / 1e9,
             self.model_config.max_model_len,
