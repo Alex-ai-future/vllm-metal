@@ -64,13 +64,31 @@ class TestLoggerConfiguration:
     def test_submodule_logger_inherits_config(self):
         """Test submodules inherit proper logger configuration."""
         from vllm_metal.platform import logger as platform_logger
-        from vllm_metal.utils import logger as utils_logger
 
-        # Both should have effective level from vllm_metal
-        assert (
-            platform_logger.getEffectiveLevel() == logging.getLogger("vllm_metal").level
+        metal_root = logging.getLogger("vllm_metal")
+
+        # 1. Verify submodule logger has NOTSET level (inherits from parent)
+        assert platform_logger.level == logging.NOTSET, (
+            "Submodule logger should have NOTSET to inherit from parent"
         )
-        assert utils_logger.getEffectiveLevel() == logging.getLogger("vllm_metal").level
+
+        # 2. Verify propagate=True (enables inheritance)
+        assert platform_logger.propagate is True, (
+            "Submodule logger should propagate=True to inherit from parent"
+        )
+
+        # 3. Verify effective level equals parent
+        assert platform_logger.getEffectiveLevel() == metal_root.level
+
+        # 4. Verify dynamic inheritance (child follows parent changes)
+        original_level = metal_root.level
+        metal_root.setLevel(logging.DEBUG)
+        try:
+            assert platform_logger.getEffectiveLevel() == logging.DEBUG, (
+                "Submodule should inherit parent's level changes"
+            )
+        finally:
+            metal_root.setLevel(original_level)  # Restore
 
 
 class TestLoggerEmission:
