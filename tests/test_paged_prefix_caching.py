@@ -16,32 +16,25 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import mlx.core as mx
-import torch
 from vllm.sampling_params import SamplingParams
 
 import vllm_metal.paged_attention_common as pac
 import vllm_metal.v1.model_runner as mr
+from tests.stub_runner import make_stub_runner
 
 
 def _make_paged_runner(num_layers: int = 2) -> mr.MetalModelRunner:
     """Build a minimal MetalModelRunner with paged KV wired up."""
-    runner = mr.MetalModelRunner.__new__(mr.MetalModelRunner)
-    runner.model = MagicMock()
-    runner._is_stt = False
-    runner._paged_attention_backend = MagicMock()  # non-None enables paged path
-    runner._paged_block_size = 4
-    runner._paged_request_seq_lens = {}
-    runner._request_states = {}
-    runner._gdn_req_to_slot = {}
-    runner._gdn_free_slots = []
-    runner.model_args = {}
-    runner._rust_state_manager = None
-    runner.num_layers = num_layers
-    runner.device = torch.device("cpu")
-    runner._sampler = None
-    runner._pending_output = None
-    runner.use_async_scheduling = True
-    return runner
+    return make_stub_runner(
+        model_args={"vocab_size": 32000},
+        model=MagicMock(),
+        _paged_attention_backend=MagicMock(),
+        _paged_block_size=4,
+        _gdn_req_to_slot={},
+        _gdn_free_slots=[],
+        _rust_state_manager=None,
+        num_layers=num_layers,
+    )
 
 
 def _greedy_sp() -> SamplingParams:
@@ -118,7 +111,7 @@ class TestPagedPrefixCacheHit:
                 return_value=logits,
             ),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array(fake_token),
             ),
             patch(
@@ -130,7 +123,9 @@ class TestPagedPrefixCacheHit:
         ):
             new_req = _make_new_req("req-1", prompt, num_computed_tokens=num_computed)
             sched_out = _make_scheduler_output([new_req])
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         state = runner._request_states.get("req-1")
         assert state is not None
@@ -158,7 +153,7 @@ class TestPagedPrefixCacheHit:
                 return_value=logits,
             ),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array(0),
             ),
             patch(
@@ -170,7 +165,9 @@ class TestPagedPrefixCacheHit:
         ):
             new_req = _make_new_req("req-1", prompt, num_computed_tokens=num_computed)
             sched_out = _make_scheduler_output([new_req])
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         # Must be full sequence length, not just suffix
         assert runner._paged_request_seq_lens["req-1"] == len(prompt)
@@ -192,7 +189,7 @@ class TestPagedPrefixCacheHit:
                 return_value=logits,
             ),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array(0),
             ),
             patch(
@@ -205,14 +202,16 @@ class TestPagedPrefixCacheHit:
             new_req = _make_new_req("req-1", prompt, num_computed_tokens=num_computed)
             sched_out = _make_scheduler_output([new_req])
             # This would raise AssertionError before the fix
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
 
 class TestSamplingMetadataWithPenalties:
     """Verify advanced sampling uses full prompt on prefix cache hits."""
 
     def test_sampling_metadata_uses_full_prompt_with_penalties(self):
-        """When repetition_penalty is set, _make_sampling_metadata must
+        """When repetition_penalty is set, the SamplingBatch must
         receive the full prompt, not just the suffix slice."""
         runner = _make_paged_runner()
         prompt = [10, 20, 30, 40, 50, 60, 70, 80]
@@ -226,14 +225,11 @@ class TestSamplingMetadataWithPenalties:
         # Use repetition_penalty to force the advanced sampling path
         sp = SamplingParams(temperature=0.8, repetition_penalty=1.2)
 
-        captured_metadata: list = []
+        captured_batches: list = []
 
-        def spy_make(self_, *args, **kwargs):
-            captured_metadata.append(args)
-            return MagicMock()
-
-        fake_sampler_output = MagicMock()
-        fake_sampler_output.sampled_token_ids = torch.tensor([[99]])
+        def spy_sample(logits_2d, batch, sampler, device):
+            captured_batches.append(batch)
+            return [99]
 
         with (
             patch.object(
@@ -241,10 +237,9 @@ class TestSamplingMetadataWithPenalties:
                 "_extract_logits",
                 return_value=logits,
             ),
-            patch.object(
-                mr.MetalModelRunner,
-                "_make_sampling_metadata",
-                spy_make,
+            patch(
+                "vllm_metal.v1.sampling_batch.sample_from_logits",
+                spy_sample,
             ),
             patch(
                 "vllm_metal.paged_attention_common.prepare_unified",
@@ -254,18 +249,18 @@ class TestSamplingMetadataWithPenalties:
             ),
         ):
             runner._sampler = MagicMock()
-            runner._sampler.forward.return_value = fake_sampler_output
 
             new_req = _make_new_req("req-1", prompt, num_computed_tokens=num_computed)
             new_req.sampling_params = sp
             sched_out = _make_scheduler_output([new_req])
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
-        # _make_sampling_metadata should have been called with the full
+        # SamplingBatch should have been constructed with the full
         # prompt as prompt_token_ids, not just the suffix.
-        assert len(captured_metadata) >= 1
-        # args[1] is prompt_token_ids_list
-        prompt_token_ids_passed = captured_metadata[-1][1][0]
+        assert len(captured_batches) >= 1
+        prompt_token_ids_passed = captured_batches[-1].prompt_token_id_lists[0]
         assert prompt_token_ids_passed == prompt
 
 
@@ -370,13 +365,15 @@ class TestMixedDecodeAndPrefixHitPrefill:
         with (
             patch.object(mr.MetalModelRunner, "_extract_logits", return_value=logits),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 side_effect=greedy_tokens,
             ),
             patch("vllm_metal.v1.model_runner.prepare_unified"),
             patch("vllm_metal.v1.model_runner.clear_context"),
         ):
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         state_a = runner._request_states["req-A"]
         assert state_a.token_ids[-1] == decode_token
@@ -424,7 +421,7 @@ class TestCachedRequestContinuation:
                 return_value=logits,
             ),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array(fake_token),
             ),
             patch("vllm_metal.v1.model_runner.prepare_unified"),
@@ -435,7 +432,9 @@ class TestCachedRequestContinuation:
                 num_computed_tokens=[6],
                 num_scheduled={"req-1": 6},
             )
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         state = runner._request_states["req-1"]
         assert state.token_ids == prompt + [fake_token]
@@ -475,7 +474,7 @@ class TestCachedRequestContinuation:
                 return_value=logits,
             ),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array(0),
             ),
             patch("vllm_metal.v1.model_runner.prepare_unified"),
@@ -486,7 +485,9 @@ class TestCachedRequestContinuation:
                 num_computed_tokens=[4],
                 num_scheduled={"req-1": 4},
             )
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         state = runner._request_states["req-1"]
         # Still prefilling — no token appended, generated_tokens stays 0
@@ -533,12 +534,14 @@ class TestPrepareUnifiedSlotMapping:
         with (
             patch.object(mr.MetalModelRunner, "_extract_logits", return_value=logits),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array([0]),
             ),
             patch.object(pac, "set_context", side_effect=_make_paged_ctx_spy(captured)),
         ):
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         assert len(captured) == 1
         ctx = captured[0]
@@ -566,12 +569,14 @@ class TestPrepareUnifiedSlotMapping:
         with (
             patch.object(mr.MetalModelRunner, "_extract_logits", return_value=logits),
             patch(
-                "vllm_metal.v1.model_runner._mlx_greedy_sample",
+                "vllm_metal.v1.sampling_batch._mlx_greedy_sample",
                 return_value=mx.array([0]),
             ),
             patch.object(pac, "set_context", side_effect=_make_paged_ctx_spy(captured)),
         ):
-            runner.execute_model(sched_out)
+            result = runner.execute_model(sched_out)
+            if result is None:
+                runner.sample_tokens(None)
 
         assert len(captured) == 1
         ctx = captured[0]

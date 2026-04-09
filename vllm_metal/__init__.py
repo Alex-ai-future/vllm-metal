@@ -11,7 +11,7 @@ import sys
 
 from vllm.logger import init_logger
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 logger = init_logger(__name__)
 # Ensure all vllm_metal loggers have INFO level by setting the root logger level

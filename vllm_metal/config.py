@@ -29,7 +29,7 @@ class MetalConfig:
     mlx_device: Literal["gpu", "cpu"]
     block_size: int
     debug: bool
-    use_paged_attention: bool = False
+    use_paged_attention: bool = True
 
     def __post_init__(self) -> None:
         if self.block_size <= 0:
@@ -42,9 +42,10 @@ class MetalConfig:
 
         if not self.use_paged_attention and not self.is_auto_memory:
             raise ValueError(
-                f"VLLM_METAL_MEMORY_FRACTION={self.memory_fraction} requires "
-                "VLLM_METAL_USE_PAGED_ATTENTION=1. "
-                "The MLX path must use VLLM_METAL_MEMORY_FRACTION=auto."
+                f"VLLM_METAL_MEMORY_FRACTION={self.memory_fraction} is only "
+                "supported with paged attention (the default). "
+                "The MLX KV cache path (VLLM_METAL_USE_PAGED_ATTENTION=0) "
+                "requires VLLM_METAL_MEMORY_FRACTION=auto."
             )
 
         if self.use_paged_attention and not self.is_auto_memory:
@@ -74,7 +75,7 @@ class MetalConfig:
             mlx_device=os.environ.get("VLLM_MLX_DEVICE", "gpu"),  # type: ignore[arg-type]
             block_size=int(os.environ.get("VLLM_METAL_BLOCK_SIZE", "16")),
             debug=os.environ.get("VLLM_METAL_DEBUG", "0") == "1",
-            use_paged_attention=os.environ.get("VLLM_METAL_USE_PAGED_ATTENTION", "0")
+            use_paged_attention=os.environ.get("VLLM_METAL_USE_PAGED_ATTENTION", "1")
             == "1",
         )
 

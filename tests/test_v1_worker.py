@@ -12,6 +12,7 @@ import pytest
 pytest.importorskip("vllm", reason="vllm not installed")
 
 from vllm_metal.stt.policy import STT_SCHED_AVAILABLE_BYTES  # noqa: E402
+from vllm_metal.v1 import model_runner as mr  # noqa: E402
 from vllm_metal.v1.worker import MetalWorker  # noqa: E402
 
 
@@ -177,6 +178,32 @@ class TestOneSequenceKvBytes:
         # Assert — SDPA bytes + linear state
         sdpa_bytes = 2 * 8 * 2048 * 4 * 256 * 2
         assert result == sdpa_bytes + linear_bytes
+
+    def test_linear_cache_bytes_uses_float32_recurrent(self) -> None:
+        runner = mr.MetalModelRunner.__new__(mr.MetalModelRunner)
+        runner.model_args = {"full_attention_interval": 2}
+        runner.kv_cache_dtype = mx.float16
+        runner.linear_conv_kernel_dim = 3
+        runner.linear_conv_dim = 5
+        runner.linear_num_v_heads = 2
+        runner.linear_value_head_dim = 7
+        runner.linear_key_head_dim = 11
+        runner.num_linear_layers = 3
+
+        conv_bytes = (
+            (runner.linear_conv_kernel_dim - 1)
+            * runner.linear_conv_dim
+            * mx.float16.size
+        )
+        recurrent_bytes = (
+            runner.linear_num_v_heads
+            * runner.linear_value_head_dim
+            * runner.linear_key_head_dim
+            * mx.float32.size
+        )
+        expected = runner.num_linear_layers * (conv_bytes + recurrent_bytes)
+
+        assert runner.linear_cache_bytes_per_slot() == expected
 
     def test_block_alignment_rounds_up_token_count(self) -> None:
         """When block_size doesn't divide max_model_len evenly, the token

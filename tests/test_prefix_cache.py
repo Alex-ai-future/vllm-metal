@@ -8,6 +8,7 @@ import mlx.core as mx
 import pytest
 
 import vllm_metal.v1.model_runner as mr
+from tests.stub_runner import make_stub_runner
 
 
 class StubArraysCache:
@@ -18,11 +19,13 @@ class StubArraysCache:
 
 class TestPrefixCacheHybridGuard:
     def _make_runner(self) -> mr.MetalModelRunner:
-        runner = mr.MetalModelRunner.__new__(mr.MetalModelRunner)
-        runner.model = MagicMock()
-        runner._is_vlm = False
-        runner._prefix_cache = mr.PrefixCacheManager(max_bytes=1024 * 1024)
-        return runner
+        return make_stub_runner(
+            model_args={"vocab_size": 100},
+            model=MagicMock(),
+            _is_vlm=False,
+            _prefix_cache=mr.PrefixCacheManager(max_bytes=1024 * 1024),
+            _sampler=MagicMock(),
+        )
 
     def test_hybrid_model_skips_prefix_cache(self, monkeypatch) -> None:
         lookup_spy = MagicMock(return_value=None)
