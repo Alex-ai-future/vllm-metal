@@ -37,7 +37,8 @@ def test_apply_macos_defaults_logs_when_setting(monkeypatch, caplog) -> None:
     monkeypatch.delenv("VLLM_WORKER_MULTIPROC_METHOD", raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
 
-    with caplog.at_level(logging.DEBUG):
+    # Configure caplog to capture vllm_metal logger
+    with caplog.at_level(logging.DEBUG, logger="vllm_metal"):
         vm._apply_macos_defaults()
 
     assert "defaulting VLLM_WORKER_MULTIPROC_METHOD" in caplog.text
