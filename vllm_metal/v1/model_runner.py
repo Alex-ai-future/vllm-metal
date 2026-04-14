@@ -42,7 +42,10 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
 from vllm_metal.config import get_config
-from vllm_metal.paged_attention_backend.hybrid import _build_linear_layer_spec
+from vllm_metal.paged_attention_backend.hybrid import (
+    HybridPagedAttentionBackend,
+    _build_linear_layer_spec,
+)
 from vllm_metal.paged_attention_backend.mla import MLA_DEFAULT_QK_ROPE_HEAD_DIM
 from vllm_metal.paged_attention_backend.protocol import PagedAttentionBackend
 from vllm_metal.paged_attention_common import (
@@ -231,6 +234,7 @@ class MetalModelRunner:
         # models so recurrent state survives request reordering/preemption.
         self._gdn_req_to_slot: dict[str, int] = {}
         self._gdn_free_slots: list[int] = []
+        self._gdn_needs_materialize = False
 
         # vLLM Sampler for token sampling with temperature, top_k, top_p support
         self._sampler = Sampler()
@@ -632,37 +636,50 @@ class MetalModelRunner:
         # at free time to avoid mx.eval synchronisation issues.
         if reused:
             backend = self._paged_attention_backend
-            if backend is not None and hasattr(backend, "_state_cache"):
-                sc = backend._state_cache
-                if sc is not None:
-                    for layer_idx in range(sc.num_layers):
-                        conv = sc.conv_states[layer_idx]
-                        conv[slot] = mx.zeros_like(conv[slot])
-                        sc.conv_states[layer_idx] = conv
-                        rec = sc.recurrent_states[layer_idx]
-                        rec[slot] = mx.zeros_like(rec[slot])
-                        sc.recurrent_states[layer_idx] = rec
+            if not isinstance(backend, HybridPagedAttentionBackend):
+                raise RuntimeError("GDN slot allocation requires hybrid paged backend")
+            sc = backend._state_cache
+            if sc is None:
+                raise RuntimeError("GDN state cache is not initialized")
+            for layer_idx in range(sc.num_layers):
+                conv = sc.conv_states[layer_idx]
+                conv[slot] = mx.zeros_like(conv[slot])
+                sc.conv_states[layer_idx] = conv
+                rec = sc.recurrent_states[layer_idx]
+                rec[slot] = mx.zeros_like(rec[slot])
+                sc.recurrent_states[layer_idx] = rec
         return slot
 
-    def _gdn_free_slot(self, req_id: str) -> None:
-        """Release a GDN state pool slot.
-
-        Materializes conv/recurrent state arrays to detach them from the
-        previous request's lazy computation graph.  Actual zeroing is
-        deferred to ``_gdn_alloc_slot`` (alloc-time zeroing) so that
-        each slot is zeroed exactly once, right before reuse.
-        """
-        slot = self._gdn_req_to_slot.pop(req_id, None)
-        if slot is None:
-            return
-        # Materialize state arrays so the lazy graph does not grow
-        # unboundedly across requests.
+    def _gdn_materialize_state_cache(self) -> None:
+        """Detach GDN state arrays from the lazy graph to prevent growth."""
         backend = self._paged_attention_backend
-        if backend is not None and hasattr(backend, "_state_cache"):
-            sc = backend._state_cache
-            if sc is not None:
-                mx.eval(*sc.conv_states, *sc.recurrent_states)
-        self._gdn_free_slots.append(slot)
+        if not isinstance(backend, HybridPagedAttentionBackend):
+            raise RuntimeError("GDN state cache requires hybrid paged backend")
+        sc = backend._state_cache
+        if sc is None:
+            raise RuntimeError("GDN state cache is not initialized")
+        mx.eval(*sc.conv_states, *sc.recurrent_states)
+
+    def _gdn_release_slots(self, req_ids: set[str]) -> None:
+        """Release finished GDN slots and defer state materialization."""
+        freed_slots: list[int] = []
+        for req_id in req_ids:
+            slot = self._gdn_req_to_slot.pop(req_id, None)
+            if slot is not None:
+                freed_slots.append(slot)
+
+        if not freed_slots:
+            return
+
+        self._gdn_needs_materialize = True
+        self._gdn_free_slots.extend(freed_slots)
+
+    def _gdn_materialize_pending_state_cache(self) -> None:
+        """Materialize GDN state after slot recycling if the step needs it."""
+        if not self._gdn_needs_materialize:
+            return
+        self._gdn_materialize_state_cache()
+        self._gdn_needs_materialize = False
 
     def _extract_logits(self, model_output: Any) -> mx.array:
         """Extract logits from model output.
@@ -1516,6 +1533,7 @@ class MetalModelRunner:
     ) -> None:
         """Evict finished request state and periodically clear MLX cache."""
         if not finished_req_ids:
+            self._gdn_materialize_pending_state_cache()
             return
 
         for req_id in finished_req_ids:
@@ -1527,7 +1545,9 @@ class MetalModelRunner:
 
             # Block freeing is handled by the scheduler's kv_cache_manager.
             self._paged_request_seq_lens.pop(req_id, None)
-            self._gdn_free_slot(req_id)
+
+        self._gdn_release_slots(finished_req_ids)
+        self._gdn_materialize_pending_state_cache()
 
         self._finished_request_count += len(finished_req_ids)
         if self._finished_request_count < _CACHE_CLEAR_INTERVAL:
@@ -1579,15 +1599,8 @@ class MetalModelRunner:
         if self._paged_attention_backend is not None and batch.has_paged_work():
             # Free GDN slots for finished requests BEFORE allocating new
             # ones, so slots can be reused within the same scheduling step.
-            # Conv/recurrent states are materialized per-layer in
-            # attention_linear.py, so the mx.eval in _gdn_free_slot is
-            # cheap (states already evaluated).  The _gdn_free_slot call
-            # in the later _cleanup_finished_requests is a no-op.
             if self.is_hybrid and scheduler_output.finished_req_ids:
-                for req_id in scheduler_output.finished_req_ids:
-                    slot = self._gdn_req_to_slot.pop(req_id, None)
-                    if slot is not None:
-                        self._gdn_free_slots.append(slot)
+                self._gdn_release_slots(scheduler_output.finished_req_ids)
 
             prefill_pack = self._build_prefill_pack(batch)
             self._start_paged_forward(
