@@ -3,11 +3,12 @@
 
 import logging
 import platform as py_platform
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import psutil
 import torch
 from vllm.platforms.interface import DeviceCapability, Platform, PlatformEnum
+from vllm.v1.attention.backend import AttentionBackend, MultipleOf
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
 from vllm_metal.config import get_config
@@ -17,6 +18,40 @@ if TYPE_CHECKING:
     from vllm.v1.attention.selector import AttentionSelectorConfig
 
 logger = logging.getLogger(__name__)
+
+
+class MetalBackend(AttentionBackend):
+    """Synthetic backend that advertises Metal kernel block alignment.
+
+    This class exists solely so the framework's hybrid-block-size math
+    (Platform._align_hybrid_block_size) can read Metal's MultipleOf(32)
+    alignment constraint. It is never dispatched to as a real attention
+    backend — the actual Metal paged attention lives in
+    metal_kernel_backend/paged_attention.py. The unimplemented methods
+    below intentionally raise: a loud failure is the correct behavior if
+    upstream ever tries to use this as a real backend.
+    """
+
+    @staticmethod
+    def get_name() -> str:
+        return "METAL_ATTN"
+
+    @staticmethod
+    def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
+        # Metal paged attention kernels require block_size in {8, 16, 32}.
+        return [MultipleOf(32)]
+
+    @staticmethod
+    def get_impl_cls():
+        raise NotImplementedError
+
+    @staticmethod
+    def get_builder_cls():
+        raise NotImplementedError
+
+    @staticmethod
+    def get_kv_cache_shape(*args, **kwargs):
+        raise NotImplementedError
 
 
 class MetalPlatform(Platform):
@@ -339,39 +374,17 @@ class MetalPlatform(Platform):
         return True
 
     @classmethod
-    def _find_non_ssm_backend(cls, vllm_config: "VllmConfig") -> "type[Any] | None":
+    def _find_non_ssm_backend(
+        cls, vllm_config: "VllmConfig"
+    ) -> "type[AttentionBackend] | None":
         """Return a Metal-specific backend for block_size calculation.
 
-        Since MLX models don't populate static_forward_context, we return
-        a synthetic backend that provides Metal-specific kernel block alignment.
+        Since MLX models don't populate static_forward_context, the default
+        Platform._find_non_ssm_backend (which walks attention layers via
+        get_layers_from_vllm_config) returns nothing. We override to return
+        the synthetic MetalBackend, which advertises Metal's MultipleOf(32)
+        kernel alignment to the framework's hybrid-block-size math.
         """
-        from vllm.v1.attention.backend import AttentionBackend, MultipleOf
-
-        class MetalBackend(AttentionBackend):
-            """Synthetic backend for Metal block_size calculation."""
-
-            @staticmethod
-            def get_name() -> str:
-                return "METAL_ATTN"
-
-            @staticmethod
-            def get_supported_kernel_block_sizes() -> list[int | MultipleOf]:
-                # Metal paged attention kernels require block_size in {8, 16, 32}
-                return [MultipleOf(32)]
-
-            # Minimal required methods (not used for block_size calculation)
-            @staticmethod
-            def get_impl_cls():
-                raise NotImplementedError
-
-            @staticmethod
-            def get_builder_cls():
-                raise NotImplementedError
-
-            @staticmethod
-            def get_kv_cache_shape(*args, **kwargs):
-                raise NotImplementedError
-
         return MetalBackend
 
     @classmethod
