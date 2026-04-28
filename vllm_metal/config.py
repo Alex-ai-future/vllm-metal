@@ -41,7 +41,6 @@ class MetalConfig:
     memory_fraction: float  # -1.0 means "auto" (calculate minimal needed)
     use_mlx: bool
     mlx_device: Literal["gpu", "cpu"]
-    block_size: int
     debug: bool
     use_paged_attention: bool = True
     multimodal_mode: MultimodalMode = "auto"
@@ -50,14 +49,6 @@ class MetalConfig:
     v_quant: str = "q3_0"  # Value quantization type: q2_0, q3_0, q4_0, q5_0 (Lloyd-Max)
 
     def __post_init__(self) -> None:
-        if self.block_size <= 0:
-            msg = (
-                f"Invalid VLLM_METAL_BLOCK_SIZE={self.block_size}. "
-                "This controls tokens per KV cache block and must be a positive "
-                "integer (>0)."
-            )
-            raise ValueError(msg)
-
         if not self.use_paged_attention and not self.is_auto_memory:
             raise ValueError(
                 f"VLLM_METAL_MEMORY_FRACTION={self.memory_fraction} is only "
@@ -123,22 +114,12 @@ class MetalConfig:
                     "Must be 'auto' or a numeric value in (0, 1]."
                 ) from e
 
-        block_size_str = envs.VLLM_METAL_BLOCK_SIZE
-        try:
-            block_size = int(block_size_str)
-        except ValueError as e:
-            raise ValueError(
-                f"Invalid VLLM_METAL_BLOCK_SIZE={block_size_str!r}. "
-                "Must be a positive integer."
-            ) from e
-
         # TurboQuant config is set via --additional-config, not env vars.
         # See MetalPlatform.check_and_update_config() for how it's applied.
         return cls(
             memory_fraction=memory_fraction,
             use_mlx=envs.VLLM_METAL_USE_MLX,
             mlx_device=envs.VLLM_MLX_DEVICE,  # type: ignore[arg-type]
-            block_size=block_size,
             debug=envs.VLLM_METAL_DEBUG,
             use_paged_attention=envs.VLLM_METAL_USE_PAGED_ATTENTION,
             multimodal_mode=envs.VLLM_METAL_MULTIMODAL_MODE,  # type: ignore[arg-type]

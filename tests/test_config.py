@@ -32,7 +32,6 @@ class TestMetalConfig:
         assert config.is_auto_memory is True
         assert config.use_mlx is True
         assert config.mlx_device == "gpu"
-        assert config.block_size == 16
         assert config.debug is False
         assert config.use_paged_attention is True
         assert config.multimodal_mode == "auto"
@@ -42,7 +41,6 @@ class TestMetalConfig:
         monkeypatch.setenv("VLLM_METAL_MEMORY_FRACTION", "0.75")
         monkeypatch.setenv("VLLM_METAL_USE_MLX", "0")
         monkeypatch.setenv("VLLM_MLX_DEVICE", "cpu")
-        monkeypatch.setenv("VLLM_METAL_BLOCK_SIZE", "32")
         monkeypatch.setenv("VLLM_METAL_DEBUG", "1")
         monkeypatch.setenv("VLLM_METAL_USE_PAGED_ATTENTION", "1")
         monkeypatch.setenv("VLLM_METAL_MULTIMODAL_MODE", "multimodal-native")
@@ -52,7 +50,6 @@ class TestMetalConfig:
         assert config.memory_fraction == 0.75
         assert config.use_mlx is False
         assert config.mlx_device == "cpu"
-        assert config.block_size == 32
         assert config.debug is True
         assert config.multimodal_mode == "multimodal-native"
 
@@ -109,17 +106,9 @@ class TestMetalConfig:
                 memory_fraction=0.7,
                 use_mlx=False,
                 mlx_device="gpu",
-                block_size=16,
                 debug=False,
                 use_paged_attention=False,
             )
-
-    def test_block_size_must_be_positive(self, monkeypatch) -> None:
-        for value in ["0", "-1"]:
-            reset_config()
-            monkeypatch.setenv("VLLM_METAL_BLOCK_SIZE", value)
-            with pytest.raises(ValueError, match="Invalid VLLM_METAL_BLOCK_SIZE"):
-                MetalConfig.from_env()
 
     def test_fraction_above_one_rejected(self) -> None:
         with pytest.raises(ValueError, match="Invalid VLLM_METAL_MEMORY_FRACTION"):
@@ -127,7 +116,6 @@ class TestMetalConfig:
                 memory_fraction=1.5,
                 use_mlx=False,
                 mlx_device="gpu",
-                block_size=16,
                 debug=False,
                 use_paged_attention=True,
             )
@@ -139,7 +127,6 @@ class TestMetalConfig:
                     memory_fraction=fraction,
                     use_mlx=False,
                     mlx_device="gpu",
-                    block_size=16,
                     debug=False,
                     use_paged_attention=True,
                 )
@@ -156,7 +143,6 @@ class TestMetalConfig:
             memory_fraction=AUTO_MEMORY_FRACTION,
             use_mlx=True,
             mlx_device="gpu",
-            block_size=16,
             debug=False,
             use_paged_attention=True,
             multimodal_mode="text-only-compat",
@@ -169,7 +155,6 @@ class TestMetalConfig:
                 memory_fraction=AUTO_MEMORY_FRACTION,
                 use_mlx=True,
                 mlx_device="gpu",
-                block_size=16,
                 debug=False,
                 use_paged_attention=True,
                 multimodal_mode="vlm",  # type: ignore[arg-type]
@@ -182,7 +167,6 @@ class TestMetalConfig:
                 memory_fraction=AUTO_MEMORY_FRACTION,
                 use_mlx=False,
                 mlx_device="gpu",
-                block_size=16,
                 debug=False,
                 use_paged_attention=False,
                 turboquant=True,
@@ -196,7 +180,6 @@ class TestMetalConfig:
                 memory_fraction=AUTO_MEMORY_FRACTION,
                 use_mlx=False,
                 mlx_device="gpu",
-                block_size=16,
                 debug=False,
                 use_paged_attention=True,
                 turboquant=True,
@@ -210,7 +193,6 @@ class TestMetalConfig:
                 memory_fraction=AUTO_MEMORY_FRACTION,
                 use_mlx=False,
                 mlx_device="gpu",
-                block_size=16,
                 debug=False,
                 use_paged_attention=True,
                 turboquant=True,

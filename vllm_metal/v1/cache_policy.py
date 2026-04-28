@@ -227,7 +227,7 @@ class ModelCachePolicy:
         if self._runner._is_stt:
             return {
                 "layers.0.self_attn": FullAttentionSpec(
-                    block_size=self._runner.metal_config.block_size,
+                    block_size=self._runner.cache_config.block_size,
                     num_kv_heads=1,
                     head_size=STT_SCHED_NOMINAL_HEAD_SIZE,
                     dtype=torch.float16,

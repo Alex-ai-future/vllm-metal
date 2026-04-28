@@ -2,7 +2,6 @@
 """Metal Platform implementation for vLLM."""
 
 import logging
-import os
 import platform as py_platform
 from typing import TYPE_CHECKING
 
@@ -302,18 +301,6 @@ class MetalPlatform(Platform):
             or cache_config.block_size < _METAL_KERNEL_MIN_BLOCK_SIZE
         ):
             cache_config.block_size = _METAL_KERNEL_MIN_BLOCK_SIZE
-
-        # ``VLLM_METAL_BLOCK_SIZE`` predates vLLM 0.20's ``--block-size`` /
-        # ``Platform._align_hybrid_block_size`` contract.  It now competes with
-        # both and is silently overridden by upstream's Phase 1 for non-hybrid
-        # models, so it cannot deliver on its name.  Warn once if a user set it
-        # explicitly; remove in a future release.
-        if "VLLM_METAL_BLOCK_SIZE" in os.environ:
-            logger.warning(
-                "VLLM_METAL_BLOCK_SIZE is deprecated and ignored as of the "
-                "vLLM 0.20 bump; upstream's --block-size is the canonical "
-                "knob. Will be removed in a future release."
-            )
 
         # Disable cascade attention (not supported), then let the adapter
         # apply any model-specific normalisations (e.g. clearing

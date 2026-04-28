@@ -7,7 +7,6 @@
 | `VLLM_METAL_MEMORY_FRACTION` | `auto` | `auto` allocates just enough memory plus a minimal KV cache, or `0.?` for fraction of memory |
 | `VLLM_METAL_USE_MLX` | `1` | Use MLX for compute (1=yes, 0=no) |
 | `VLLM_MLX_DEVICE` | `gpu` | MLX device (`gpu` or `cpu`) |
-| `VLLM_METAL_BLOCK_SIZE` | `16` | KV cache block size |
 | `VLLM_METAL_USE_PAGED_ATTENTION` | `1` | Enable experimental paged KV cache |
 | `VLLM_METAL_DEBUG` | `0` | Enable debug logging |
 | `VLLM_METAL_MULTIMODAL_MODE` | `auto` | Multimodal serve mode: `auto`, `text-only-compat`, or `multimodal-native` |
