@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 """Smoke test: ``--block-size`` (== ``LLM(block_size=...)``) flows correctly
 through vLLM 0.20's ``Platform.update_block_size_for_backend`` and our
-``MetalBackend(MultipleOf(32))`` advertisement, on both non-hybrid and hybrid
+``MetalBackend(MultipleOf(16))`` advertisement, on both non-hybrid and hybrid
 models.
 
 Background:
 - After the vLLM 0.20 bump, ``Platform.update_block_size_for_backend`` Phase 1
-  picks ``MetalBackend.get_preferred_block_size()`` (32 from ``MultipleOf(32)``)
-  unless ``cache_config.user_specified_block_size`` is True.
+  picks ``MetalBackend.get_preferred_block_size()`` (16 from ``MultipleOf(16)``,
+  the Metal kernel sweet spot) unless ``cache_config.user_specified_block_size``
+  is True.
 - ``--block-size N`` (CLI) and ``LLM(block_size=N)`` (Python API) both set that
   flag.
 
@@ -17,12 +18,12 @@ so we assert ``actual == requested`` on the parent's view.
 
 For hybrid models (e.g. Qwen3.5: SDPA + GDN linear attention), Phase 2's
 ``_align_hybrid_block_size`` *does* bump the subprocess's
-``cache_config.block_size`` upward to satisfy mamba/attention page-size
-alignment (e.g. 8 → 544 for Qwen3.5-0.8B), but vLLM spawns the EngineCore in
-a separate process and the bump never propagates back to the parent's
+``cache_config.block_size`` upward to a multiple of 16 to satisfy
+mamba/attention page-size alignment, but vLLM spawns the EngineCore in a
+separate process and the bump never propagates back to the parent's
 ``vllm_config``.  So the parent always sees the user's input value, regardless.
 The meaningful verification for the hybrid case is therefore implicit: if
-``MetalBackend(MultipleOf(32))`` did not flow correctly through
+``MetalBackend(MultipleOf(16))`` did not flow correctly through
 ``_align_hybrid_block_size``, ``unify_kv_cache_spec_page_size`` would have
 raised ``NotImplementedError`` in the subprocess and ``LLM(...)`` would never
 have returned.  We assert that ``llm.generate`` produces non-empty output —

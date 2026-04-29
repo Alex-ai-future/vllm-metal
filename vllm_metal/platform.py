@@ -373,13 +373,15 @@ class MetalPlatform(Platform):
         #   page size divisibility validation between SDPA and Mamba layers.
         #
         # Solution (PR #235):
-        # - vLLM sees a large block_size (e.g., 160) for its scheduler validation.
-        # - The Metal kernel uses a translated block_size (e.g., 32) that it supports.
+        # - vLLM sees a large block_size (e.g., 144 = 16 * 9) for its scheduler
+        #   validation.
+        # - The Metal kernel uses a translated block_size (16, the kernel sweet
+        #   spot) that it supports.
         # - Each vLLM block is split into ratio = cache_block_size / kernel_block_size
-        #   kernel blocks. For example, one vLLM block of 160 tokens becomes 5 kernel
-        #   blocks of 32 tokens each.
-        # - The KV cache is reshaped (zero-copy) to match: [num_blocks, 160, ...] →
-        #   [num_blocks*5, 32, ...]. The physical memory layout is unchanged.
+        #   kernel blocks. For example, one vLLM block of 144 tokens becomes 9 kernel
+        #   blocks of 16 tokens each.
+        # - The KV cache is reshaped (zero-copy) to match: [num_blocks, 144, ...] →
+        #   [num_blocks*9, 16, ...]. The physical memory layout is unchanged.
         # - Block tables are expanded so the kernel reads the correct blocks.
         #
         # This is a logical transformation only — the computation is identical, just
@@ -390,7 +392,7 @@ class MetalPlatform(Platform):
                 "Using block-size translation (PR #235) to convert vLLM's large "
                 "block_size to a Metal kernel-compatible size.\n"
                 "  Mechanism: Each vLLM block is split into multiple kernel blocks.\n"
-                "  Example: vLLM block_size=160 → kernel block_size=32 (ratio=5).\n"
+                "  Example: vLLM block_size=144 → kernel block_size=16 (ratio=9).\n"
                 "  The KV cache is reshaped (zero-copy) and block tables are expanded.\n"
                 "  This is a logical transformation — physical memory is unchanged."
             )
